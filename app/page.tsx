@@ -19,26 +19,32 @@ const SAMPLE_CASES: SampleCase[] = [
   {
     id: 'night-out',
     name: 'The Night Out',
-    description: 'Classic alibi — witness claims they were home alone all evening',
-    transcriptA: `Q: Where were you on the evening of March 15th?
+    description: 'Classic alibi — demonstrates all three contradiction types',
+    transcriptA: `Q: What time did you get home on March 15th?
+A: I got home around 6:30, maybe a little after.
+
+Q: Where were you for the rest of the evening?
 A: I was home all night. I didn't go anywhere.
+
+Q: Did anyone visit you that evening?
+A: No, I was completely alone. Nobody came to my apartment.
 
 Q: What time did you go to bed?
 A: I went to sleep around 10pm. I was tired.
 
-Q: Did you see anyone that night?
-A: No, I was completely alone. Nobody came to my apartment.
-
 Q: What did you have for dinner?
 A: I ordered pizza from Domino's around 7pm.`,
-    transcriptB: `Q: Where were you on the evening of March 15th?
+    transcriptB: `Q: What time did you get home on March 15th?
+A: I arrived at about 6:45. I remember because the news was on.
+
+Q: Where were you for the rest of the evening?
 A: I stepped out around 7 to grab something to eat, then came back.
+
+Q: Did anyone visit you that evening?
+A: Yeah, my neighbor stopped by around 8:30 to drop off some documents.
 
 Q: What time did you go to bed?
 A: I was up watching TV until midnight, then I crashed.
-
-Q: Did you see anyone that night?
-A: Yeah, my neighbor stopped by around 8:30 to drop off some documents.
 
 Q: What did you have for dinner?
 A: I made pasta at home. I don't remember ordering anything.`,
