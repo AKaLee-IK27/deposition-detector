@@ -1,8 +1,15 @@
 # Deposition Contradiction Detector
 
+[![Live Demo](https://img.shields.io/badge/Live_Demo-▶-22c55e?style=for-the-badge)](https://deposition-detector.vercel.app)
+[![Deployed on Vercel](https://img.shields.io/badge/Deployed_on-Vercel-black?style=flat-square)](https://vercel.com)
+
 A web application that uses AI to compare two deposition transcripts from the same witness and automatically identify contradictions — ranked by confidence with noise filtering.
 
 Built for legal professionals who need to quickly surface inconsistencies across multiple witness depositions.
+
+### 🔗 [Try it live → deposition-detector.vercel.app](https://deposition-detector.vercel.app)
+
+![App screenshot](docs/demo-screenshot.png)
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black)
 ![React](https://img.shields.io/badge/React-19-blue)
