@@ -11,13 +11,16 @@ Built for legal professionals who need to quickly surface inconsistencies across
 
 ## Features
 
-- **AI-powered analysis** — Gemini identifies direct contradictions, inferential conflicts, and false positives
+- **AI-powered analysis** — Multi-provider support (Gemini 2.5 Flash primary, Groq fallback) for reliable analysis
 - **Deterministic confidence scoring** — weighted algorithm combining contradiction type, metadata flags, and lexical overlap
+- **Smart deduplication** — automatically merges near-identical contradictions to reduce noise
 - **Noise filtering** — toggle to hide false positives and focus on real contradictions
+- **Response caching** — identical analyses return instantly from cache
 - **Sample cases** — three built-in demo scenarios (alibi, car accident, business dispute)
 - **Export results** — copy analysis to clipboard in a structured format
 - **Keyboard shortcuts** — `⌘+Enter` / `Ctrl+Enter` to analyze
 - **Accessible UI** — ARIA labels, skip links, screen reader announcements
+- **Input validation** — warnings for identical transcripts, missing Q&A format, and low overlap
 
 ## How It Works
 
@@ -57,13 +60,22 @@ Score = (Type × 0.4) + (Metadata × 0.4) + (Lexical × 0.2)
 
 Same inputs always produce the exact same score — no randomness.
 
+### Deduplication
+
+After scoring, near-identical contradictions are automatically merged. Two contradictions are considered duplicates when **both** their `quote_a` and `quote_b` have Jaccard similarity > 0.7. When duplicates are detected, only the higher-confidence result is kept.
+
 ## Tech Stack
 
 - **Framework**: Next.js 16 (App Router)
 - **UI**: React 19, Tailwind CSS v4
-- **AI**: Google Generative AI SDK (Gemini 2.5 Flash with fallback chain)
+- **AI**: Google Generative AI SDK (Gemini 2.5 Flash) + Groq (Llama 3.3 70B fallback)
 - **Language**: TypeScript
 - **Deployment**: Vercel
+
+## Limits
+
+- **Combined transcript length**: 50,000 characters maximum (both transcripts combined)
+- This ensures reliable LLM processing and prevents context overflow
 
 ## Getting Started
 
@@ -96,6 +108,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GOOGLE_AI_API_KEY` | Yes | Google AI Studio API key for Gemini access |
+| `GROQ_API_KEY` | No | Groq API key for Llama fallback (used if Gemini is unavailable) |
 
 ## Deployment
 
@@ -122,7 +135,7 @@ deposition-detector/
 ├── app/
 │   ├── api/
 │   │   └── analyze/
-│   │       └── route.ts          # API endpoint: Gemini analysis + scoring
+│   │       └── route.ts          # API endpoint: analysis + scoring + caching
 │   ├── layout.tsx                # Root layout with fonts
 │   ├── page.tsx                  # Main UI: input, results, sample cases
 │   └── globals.css               # Design tokens and animations
@@ -131,10 +144,13 @@ deposition-detector/
 │   ├── FilterBar.tsx             # Sort + noise filter controls
 │   ├── ProcessingSteps.tsx       # Animated progress indicator
 │   ├── Tooltip.tsx               # Accessible tooltip component
-│   └── TranscriptInput.tsx       # Text input with label
+│   ├── TranscriptInput.tsx       # Text input with label
+│   └── WarningBanner.tsx         # Input validation warnings
 ├── lib/
-│   ├── prompt.ts                 # System prompt for Gemini
-│   └── scorer.ts                 # Deterministic confidence scoring
+│   ├── cache.ts                  # In-memory response cache
+│   ├── llm.ts                    # Multi-provider LLM client (Gemini + Groq)
+│   ├── prompt.ts                 # System prompt for analysis
+│   └── scorer.ts                 # Deterministic confidence scoring + deduplication
 ├── types/
 │   └── contradiction.ts          # TypeScript types
 └── public/                       # Static assets
@@ -177,6 +193,10 @@ Compares two transcripts and returns scored contradictions.
   ]
 }
 ```
+
+## Future Enhancements
+
+**Manual Category Override** — Allow lawyers to reclassify contradictions (e.g., INFERENTIAL → FALSE_POSITIVE) after review. The system would re-score based on the new category, but maintain stable display order until the user explicitly re-sorts. This preserves the AI's initial judgment while giving legal professionals final authority over classification.
 
 ## License
 

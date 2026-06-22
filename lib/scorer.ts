@@ -113,5 +113,45 @@ export function scoreContradiction(raw: RawContradiction): ScoredContradiction {
  * Score an array of raw contradictions.
  */
 export function scoreAll(raw: RawContradiction[]): ScoredContradiction[] {
-  return raw.map(scoreContradiction);
+  const scored = raw.map(scoreContradiction);
+  return deduplicateContradictions(scored);
+}
+
+/**
+ * Remove duplicate contradictions where both quotes are highly similar.
+ * Two contradictions are considered duplicates if BOTH their quote_a AND
+ * quote_b have Jaccard similarity > 0.7. When duplicates are found,
+ * keep only the one with higher confidence_score.
+ */
+function deduplicateContradictions(scored: ScoredContradiction[]): ScoredContradiction[] {
+  const DUPLICATE_THRESHOLD = 0.7;
+  const toRemove = new Set<number>();
+
+  // Compare all pairs, mark the lower-confidence one as duplicate
+  for (let i = 0; i < scored.length; i++) {
+    for (let j = i + 1; j < scored.length; j++) {
+      if (toRemove.has(i) || toRemove.has(j)) continue;
+
+      const quoteASimilarity = jaccardSimilarity(
+        tokenize(scored[i].quote_a),
+        tokenize(scored[j].quote_a)
+      );
+      const quoteBSimilarity = jaccardSimilarity(
+        tokenize(scored[i].quote_b),
+        tokenize(scored[j].quote_b)
+      );
+
+      if (quoteASimilarity > DUPLICATE_THRESHOLD && quoteBSimilarity > DUPLICATE_THRESHOLD) {
+        // Remove the one with lower confidence
+        if (scored[i].confidence_score >= scored[j].confidence_score) {
+          toRemove.add(j);
+        } else {
+          toRemove.add(i);
+          break; // i is removed, no need to compare further
+        }
+      }
+    }
+  }
+
+  return scored.filter((_, i) => !toRemove.has(i));
 }

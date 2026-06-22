@@ -16,6 +16,7 @@ export interface RawContradiction {
 
 export interface LLMResponse {
   contradictions: RawContradiction[];
+  warnings?: string[];
 }
 
 // Scored output types — confidence computed deterministically
@@ -28,5 +29,6 @@ export interface ScoredContradiction extends RawContradiction {
 
 export interface AnalysisResult {
   contradictions: ScoredContradiction[];
+  warnings?: string[];
   error?: string;
 }

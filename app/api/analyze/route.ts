@@ -1,74 +1,54 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { scoreAll } from '@/lib/scorer';
-import { SYSTEM_PROMPT } from '@/lib/prompt';
-import type { LLMResponse, RawContradiction } from '@/types/contradiction';
-
-// Fallback chain: primary first, then alternatives on quota/rate errors
-const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+import { getProviders, parseLLMResponse } from '@/lib/llm';
+import { getCacheKey, getCached, setCache } from '@/lib/cache';
+import type { RawContradiction } from '@/types/contradiction';
 
 // Request limits
 const MAX_BODY_SIZE = 1024 * 1024; // 1MB
-const REQUEST_TIMEOUT = 60000; // 60 seconds
+const MAX_COMBINED_CHARS = 50000; // Practical limit for LLM context
 
-function parseLLMResponse(text: string): LLMResponse {
-  // Try direct JSON parse first
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed.contradictions && Array.isArray(parsed.contradictions)) {
-      return validateAndClean(parsed);
-    }
-  } catch {
-    // Fall through to regex extraction
-  }
-
-  // Fallback: try to extract JSON from markdown code blocks or surrounding text
-  const jsonMatch = text.match(/\{[\s\S]*"contradictions"[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.contradictions && Array.isArray(parsed.contradictions)) {
-        return validateAndClean(parsed);
-      }
-    } catch {
-      // Fall through
-    }
-  }
-
-  throw new Error('PARSE_ERROR');
-}
-
-function validateAndClean(response: LLMResponse): LLMResponse {
+function validateAndClean(response: { contradictions: unknown[]; warnings?: unknown[] }) {
   const validCategories = new Set(['DIRECT', 'INFERENTIAL', 'FALSE_POSITIVE']);
 
-  const cleaned: RawContradiction[] = response.contradictions
-    .filter((c) => c && typeof c === 'object')
-    .filter((c) => validCategories.has(c.category))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cleaned: RawContradiction[] = (response.contradictions || [])
+    .filter((c): c is Record<string, any> => c != null && typeof c === 'object')
+    .filter((c) => validCategories.has(String(c.category)))
     .map((c) => ({
       quote_a: String(c.quote_a || ''),
       quote_b: String(c.quote_b || ''),
       category: c.category as RawContradiction['category'],
       explanation: String(c.explanation || ''),
-      has_time_conflict: Boolean(c.has_time_conflict),
-      has_location_conflict: Boolean(c.has_location_conflict),
-      has_identity_conflict: Boolean(c.has_identity_conflict),
+      has_time_conflict: c.has_time_conflict === true,
+      has_location_conflict: c.has_location_conflict === true,
+      has_identity_conflict: c.has_identity_conflict === true,
       semantic_distance: Math.max(1, Math.min(5, Math.round(Number(c.semantic_distance) || 1))),
     }))
     .filter((c) => c.quote_a && c.quote_b);
 
-  return { contradictions: cleaned };
+  // Clean warnings: keep only known warning codes, ensure strings
+  const knownWarnings = new Set([
+    'INPUT_NOT_DEPOSITION',
+    'DIFFERENT_WITNESSES',
+    'DIFFERENT_CASES',
+  ]);
+  const cleanedWarnings = (response.warnings || [])
+    .filter((w): w is string => typeof w === 'string')
+    .filter((w) => knownWarnings.has(w.split(':')[0]));
+
+  return { contradictions: cleaned, warnings: cleanedWarnings };
 }
 
 function isQuotaError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const msg = error.message || '';
-  return msg.includes('429') || msg.includes('quota') || msg.includes('rate');
+  return msg.includes('429') || msg.includes('quota') || msg.includes('rate') || msg.includes('limit');
 }
 
 function sanitizeError(error: unknown): string {
   if (!(error instanceof Error)) return 'Analysis failed. Please try again.';
   const msg = error.message || '';
 
-  // Map known error patterns to user-friendly messages
   if (msg.includes('PARSE_ERROR')) {
     return 'The AI response could not be parsed. Please try again.';
   }
@@ -82,7 +62,6 @@ function sanitizeError(error: unknown): string {
     return 'Analysis service is temporarily unavailable. Please try again in a minute.';
   }
 
-  // Unknown error: return generic message, never expose raw API errors
   return 'Analysis failed. Please try again.';
 }
 
@@ -107,68 +86,81 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check combined transcript length
+    // Check combined transcript length (practical limit for LLM context)
     const combinedLength = transcriptA.length + transcriptB.length;
-    if (combinedLength > MAX_BODY_SIZE) {
+    if (combinedLength > MAX_COMBINED_CHARS) {
       return Response.json(
-        { error: 'Transcripts too long. Please shorten them and try again.' },
+        { error: `Transcripts too long (max ${MAX_COMBINED_CHARS.toLocaleString()} characters combined). Please shorten them and try again.` },
         { status: 413 }
       );
     }
 
-    const apiKey = process.env.GOOGLE_AI_API_KEY;
-    if (!apiKey) {
+    const trimmedA = transcriptA.trim();
+    const trimmedB = transcriptB.trim();
+
+    // Check cache first
+    const cacheKey = getCacheKey(trimmedA, trimmedB);
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return Response.json({
+        contradictions: cached.contradictions,
+        warnings: cached.warnings,
+        cached: true,
+      });
+    }
+
+    // Get ordered list of LLM providers (Google first, Groq fallback)
+    const providers = getProviders();
+    if (providers.length === 0) {
       return Response.json(
-        { error: 'Analysis service is not configured.' },
+        { error: 'Analysis service is not configured. Please set GOOGLE_AI_API_KEY or GROQ_API_KEY.' },
         { status: 500 }
       );
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-
     const userPrompt = `Analyze these two deposition transcripts from the same witness and identify all contradictions.
 
 === TRANSCRIPT A ===
-${transcriptA}
+${trimmedA}
 
 === TRANSCRIPT B ===
-${transcriptB}`;
+${trimmedB}`;
 
-    // Try each model in the fallback chain
+    // Try each provider in order, fallback on quota/rate errors
     let lastError: unknown = null;
 
-    for (const modelName of MODELS) {
+    for (const provider of providers) {
       try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        
-        // Add timeout to generateContent
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('TIMEOUT')), REQUEST_TIMEOUT);
-        });
-        
-        const result = await Promise.race([
-          model.generateContent([
-            { text: SYSTEM_PROMPT },
-            { text: userPrompt },
-          ]),
-          timeoutPromise,
-        ]);
-
-        const responseText = result.response.text();
+        console.log(`[analyze] Trying provider: ${provider.name}`);
+        const responseText = await provider.generate(userPrompt);
+        console.log(`[analyze] Response received from ${provider.name}, length: ${responseText.length}`);
         const llmResponse = parseLLMResponse(responseText);
-        const scored = scoreAll(llmResponse.contradictions);
+        const validated = validateAndClean(llmResponse);
+        const scored = scoreAll(validated.contradictions);
+        const sortedScored = scored.sort((a, b) => b.confidence_score - a.confidence_score);
 
-        return Response.json({ contradictions: scored });
+        // Cache the result
+        setCache(cacheKey, sortedScored, validated.warnings);
+        console.log(`[analyze] Cached result for key: ${cacheKey}`);
+
+        return Response.json({
+          contradictions: sortedScored,
+          warnings: validated.warnings,
+          cached: false,
+        });
       } catch (error) {
+        console.error(`[analyze] Error from ${provider.name}:`, error instanceof Error ? error.message : error);
         lastError = error;
-        // Only continue to next model if it's a quota/rate error
+
+        // Only try next provider on quota/rate limit errors
         if (!isQuotaError(error)) {
           break;
         }
+        console.log(`[analyze] Quota error from ${provider.name}, trying next provider...`);
       }
     }
 
-    // All models failed or non-quota error
+    // All providers failed
     const message = sanitizeError(lastError);
     return Response.json({ error: message, contradictions: [] }, { status: 500 });
   } catch (error) {
